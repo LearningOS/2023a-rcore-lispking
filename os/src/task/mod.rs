@@ -14,7 +14,7 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
-use crate::config::MAX_APP_NUM;
+use crate::config::{MAX_APP_NUM, MAX_SYSCALL_NUM};
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
 use lazy_static::*;
@@ -22,6 +22,9 @@ use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
+
+use crate::timer::get_time_ms;
+use crate::syscall::TaskInfo;
 
 /// The task manager, where all the tasks are managed.
 ///
@@ -54,6 +57,8 @@ lazy_static! {
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
+            syscall_times: [0; MAX_SYSCALL_NUM],
+            start_time_ms: 0,
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
@@ -135,6 +140,25 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    /// Get current task information
+    fn get_current_task_info(&self) -> TaskInfo {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let current_task = inner.tasks[current];
+        TaskInfo {
+            status: current_task.task_status,
+            syscall_times: current_task.syscall_times,
+            time: get_time_ms() - current_task.start_time_ms
+        }
+    }
+
+    /// Increase syscall times of current task
+    fn increase_current_task_syscall_times(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].syscall_times[syscall_id] += 1;
+    }
 }
 
 /// Run the first task in task list.
@@ -156,6 +180,19 @@ fn mark_current_suspended() {
 /// Change the status of current `Running` task into `Exited`.
 fn mark_current_exited() {
     TASK_MANAGER.mark_current_exited();
+}
+
+/// Get current task information
+pub fn get_current_task_info() -> TaskInfo {
+    TASK_MANAGER.get_current_task_info()
+}
+
+/// Increase syscall times of current task
+pub fn increase_current_task_syscall_times(syscall_id: usize) {
+    if syscall_id >= MAX_SYSCALL_NUM {
+        panic!("Invalid syscall by syscall_id: {}", syscall_id);
+    }
+    TASK_MANAGER.increase_current_task_syscall_times(syscall_id);
 }
 
 /// Suspend the current 'Running' task and run the next task in task list.
