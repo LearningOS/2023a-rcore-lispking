@@ -272,7 +272,7 @@ pub fn new_memory(start: usize, len: usize, port: usize) -> isize {
     }
 
     let current_task = current_task();
-    let mut end_va = (start + len).into();
+    let end_va = (start + len).into();
     if invalid_page_mapped(&current_task.memory_set, start_va, end_va) {
         return -1;
     }
@@ -280,10 +280,7 @@ pub fn new_memory(start: usize, len: usize, port: usize) -> isize {
     let mut permission = MapPermission::from_bits((port as u8) << 1).unwrap();
     permission.set(MapPermission::U, true);
 
-    if end_va.aligned() {
-        end_va = (end_va.0 + 1).into();
-    }
-    current_task.memory_set.insert_framed_area(start_va, end_va, permission);
+    current_task.memory_set.mmap(start_va, end_va, permission);
 
     0
 }
@@ -307,6 +304,15 @@ fn invalid_page_mapped(memory_set: &MemorySet, start_va: VirtAddr, end_va: VirtA
     })
 }
 
+#[inline(always)]
+fn invalid_page_mapped_count(memory_set: &MemorySet, start_va: VirtAddr, end_va: VirtAddr) -> bool {
+    let start_vpn = start_va.floor();
+    let end_vpn = end_va.ceil();
+    memory_set.areas.iter().filter(|area| {
+        start_vpn <= area.vpn_range.get_start() && end_vpn > area.vpn_range.get_start()
+    }).count() < (end_vpn.0 - start_vpn.0)
+}
+
 /// delete memory
 pub fn delete_memory(start: usize, len: usize) -> isize {
     if len == 0 {
@@ -320,11 +326,12 @@ pub fn delete_memory(start: usize, len: usize) -> isize {
 
     let current_task = current_task();
     let memory_set = &mut current_task.memory_set;
+    let end_va = (start + len).into();
 
-    let mut end_va: VirtAddr = (start + len).into();
-    if end_va.aligned() {
-        end_va = (end_va.0 + 1).into();
+    if invalid_page_mapped_count(&memory_set, start_va, end_va) {
+        return -1;
     }
+
     memory_set.unmap(start_va, end_va);
     
     0

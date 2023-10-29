@@ -265,6 +265,21 @@ impl MemorySet {
         }
     }
 
+    /// mmap area, support more page size handle
+    pub fn mmap(&mut self, start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) {
+        let mut start = start_va.0;
+        let end = end_va.0;
+        while start < end {
+            let mut max_va = start + PAGE_SIZE;
+            if max_va > end {
+                max_va = end;
+            }
+    
+            self.insert_framed_area(start.into(), max_va.into(), permission);
+            start = max_va;
+        }
+    }
+
     /// unmap area
     pub fn unmap(&mut self, start_va: VirtAddr, end_va: VirtAddr) {
         let start_vpn = start_va.floor();
