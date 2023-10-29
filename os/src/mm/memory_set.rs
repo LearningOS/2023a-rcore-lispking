@@ -306,7 +306,7 @@ impl MemorySet {
 
         let end_va = (start + len).into();
 
-        if self.invalid_page_mapped(start_va, end_va) {
+        if self.valid_page_mapped(start_va, end_va) {
             return -1;
         }
 
@@ -316,6 +316,7 @@ impl MemorySet {
     }
 
     /// mmap area, support more page size handle
+    #[inline(always)]
     pub fn _mmap(&mut self, start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) {
         let mut start = start_va.0;
         let end = end_va.0;
@@ -331,21 +332,19 @@ impl MemorySet {
     }
 
     /// unmap area
+    #[inline(always)]
     pub fn _unmap(&mut self, start_va: VirtAddr, end_va: VirtAddr) {
         let start_vpn = start_va.floor();
         let end_vpn = end_va.ceil();
+        let vpn_range = VPNRange::new(start_vpn, end_vpn);
 
-        let need_clear_area_len: usize = self.areas.len();
-        for i in 0..need_clear_area_len {
-            if self.areas.get(i).is_none() {
-                continue;
-            }
-
-            if start_vpn <= self.areas[i].vpn_range.get_start() && end_vpn > self.areas[i].vpn_range.get_start() {
-                self.areas[i].unmap(&mut self.page_table);
-                self.areas.remove(i);
-            }
-        }
+        vpn_range.into_iter().for_each(|vpn| {
+            self.areas.iter_mut().for_each(|area| {
+                if vpn >= area.vpn_range.get_start() && vpn <= area.vpn_range.get_end() {
+                    area.unmap_one(&mut self.page_table, vpn);
+                }
+            });
+        });
     }
 
 
@@ -363,8 +362,23 @@ impl MemorySet {
     fn invalid_page_mapped(&self, start_va: VirtAddr, end_va: VirtAddr) -> bool {
         let start_vpn = start_va.floor();
         let end_vpn = end_va.ceil();
-        self.areas.iter().any(|area| {
-            start_vpn <= area.vpn_range.get_start() && end_vpn > area.vpn_range.get_start()
+        let vpn_range = VPNRange::new(start_vpn, end_vpn);
+
+        vpn_range.into_iter().any(|vpn| {
+            let pte = self.page_table.find_pte(vpn);
+            pte.is_some() && pte.unwrap().is_valid()
+        })
+    }
+
+    #[inline(always)]
+    fn valid_page_mapped(&self, start_va: VirtAddr, end_va: VirtAddr) -> bool {
+        let start_vpn = start_va.floor();
+        let end_vpn = end_va.ceil();
+        let vpn_range = VPNRange::new(start_vpn, end_vpn);
+
+        vpn_range.into_iter().any(|vpn| {
+            let pte = self.page_table.find_pte(vpn);
+            pte.is_none() || !pte.unwrap().is_valid()
         })
     }
 }
