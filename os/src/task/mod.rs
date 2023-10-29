@@ -15,7 +15,6 @@ mod switch;
 mod task;
 
 use crate::config::MAX_SYSCALL_NUM;
-use crate::mm::{VirtAddr, MapPermission, MemorySet};
 
 use crate::loader::{get_app_data, get_num_app};
 use crate::sync::UPSafeCell;
@@ -188,6 +187,20 @@ impl TaskManager {
             &mut *(&mut inner.tasks[current] as *mut TaskControlBlock)
         }
     }
+
+    /// memory map
+    fn mmap(&self, start: usize, len: usize, port: usize) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].memory_set.mmap(start, len, port)
+    }
+
+    /// memory unmap
+    pub fn munmap(&self, start: usize, len: usize) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].memory_set.munmap(start, len)
+    }
 }
 
 /// Run the first task in task list.
@@ -256,83 +269,12 @@ pub fn increase_current_task_syscall_times(syscall_id: usize) {
     TASK_MANAGER.increase_current_task_syscall_times(syscall_id);
 }
 
-/// new memory
-pub fn new_memory(start: usize, len: usize, port: usize) -> isize {
-    if len == 0 {
-        return 0;
-    }
-
-    if invalid_port(port) {
-        return -1;
-    }
-    
-    let start_va = start.into();
-    if invalid_aligned(start_va) {
-        return -1;
-    }
-
-    let current_task = current_task();
-    let end_va = (start + len).into();
-    if invalid_page_mapped(&current_task.memory_set, start_va, end_va) {
-        return -1;
-    }
-
-    let mut permission = MapPermission::from_bits((port as u8) << 1).unwrap();
-    permission.set(MapPermission::U, true);
-
-    current_task.memory_set.mmap(start_va, end_va, permission);
-
-    0
+/// Memory map
+pub fn mmap(start: usize, len: usize, port: usize) -> isize {
+    TASK_MANAGER.mmap(start, len, port)
 }
 
-#[inline(always)]
-fn invalid_aligned(start_va: VirtAddr) -> bool {
-    !start_va.aligned()
-}
-
-#[inline(always)]
-fn invalid_port(port: usize) -> bool {
-    (port & !0x7 != 0) || (port & 0x7 == 0)
-}
-
-#[inline(always)]
-fn invalid_page_mapped(memory_set: &MemorySet, start_va: VirtAddr, end_va: VirtAddr) -> bool {
-    let start_vpn = start_va.floor();
-    let end_vpn = end_va.ceil();
-    memory_set.areas.iter().any(|area| {
-        start_vpn <= area.vpn_range.get_start() && end_vpn > area.vpn_range.get_start()
-    })
-}
-
-#[inline(always)]
-fn invalid_page_mapped_count(memory_set: &MemorySet, start_va: VirtAddr, end_va: VirtAddr) -> bool {
-    let start_vpn = start_va.floor();
-    let end_vpn = end_va.ceil();
-    memory_set.areas.iter().filter(|area| {
-        start_vpn <= area.vpn_range.get_start() && end_vpn > area.vpn_range.get_start()
-    }).count() < (end_vpn.0 - start_vpn.0)
-}
-
-/// delete memory
-pub fn delete_memory(start: usize, len: usize) -> isize {
-    if len == 0 {
-        return 0;
-    }
-
-    let start_va = start.into();
-    if invalid_aligned(start_va) {
-        return -1;
-    }
-
-    let current_task = current_task();
-    let memory_set = &mut current_task.memory_set;
-    let end_va = (start + len).into();
-
-    if invalid_page_mapped_count(&memory_set, start_va, end_va) {
-        return -1;
-    }
-
-    memory_set.unmap(start_va, end_va);
-    
-    0
+/// Memory unmap
+pub fn munmap(start: usize, len: usize) -> isize {
+    TASK_MANAGER.munmap(start, len)
 }

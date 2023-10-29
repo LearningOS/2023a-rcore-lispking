@@ -4,7 +4,7 @@ use crate::{
     mm::translated_byte_buffer,
     task::{
         change_program_brk, exit_current_and_run_next, suspend_current_and_run_next, TaskStatus,
-        current_task_info, current_user_token, new_memory, delete_memory,
+        current_task_info, current_user_token, mmap, munmap,
     },
     timer::get_time_us
 };
@@ -90,14 +90,15 @@ pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
 // YOUR JOB: Implement mmap.
 pub fn sys_mmap(start: usize, len: usize, port: usize) -> isize {
     trace!("kernel: sys_mmap");
-    new_memory(start, len, port)
+    mmap(start, len, port)
 }
 
 // YOUR JOB: Implement munmap.
 pub fn sys_munmap(start: usize, len: usize) -> isize {
     trace!("kernel: sys_munmap NOT IMPLEMENTED YET!");
-    delete_memory(start, len)
+    munmap(start, len)
 }
+
 /// change data segment size
 pub fn sys_sbrk(size: i32) -> isize {
     trace!("kernel: sys_sbrk");

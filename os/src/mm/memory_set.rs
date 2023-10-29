@@ -265,8 +265,58 @@ impl MemorySet {
         }
     }
 
+    /// new memory
+    pub fn mmap(&mut self, start: usize, len: usize, port: usize) -> isize {
+        if len == 0 {
+            return 0;
+        }
+
+        if self.invalid_port(port) {
+            return -1;
+        }
+        
+        let start_va = start.into();
+        if self.invalid_aligned(start_va) {
+            return -1;
+        }
+
+        let end_va = (start + len).into();
+        if self.invalid_page_mapped(start_va, end_va) {
+            return -1;
+        }
+
+        let mut permission = MapPermission::from_bits((port as u8) << 1).unwrap();
+        permission.set(MapPermission::U, true);
+
+        self._mmap(start_va, end_va, permission);
+
+        0
+    }
+
+    /// delete memory
+    pub fn munmap(&mut self, start: usize, len: usize) -> isize {
+        if len == 0 {
+            return 0;
+        }
+
+        let start_va = start.into();
+        if self.invalid_aligned(start_va) {
+            return -1;
+        }
+
+        let end_va = (start + len).into();
+
+        if self.invalid_page_mapped_count(start_va, end_va) {
+            return -1;
+        }
+
+        self._unmap(start_va, end_va);
+        
+        0
+    }
+
     /// mmap area, support more page size handle
-    pub fn mmap(&mut self, start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) {
+    pub fn _mmap(&mut self, start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) {
         let mut start = start_va.0;
         let end = end_va.0;
         while start < end {
@@ -281,7 +331,7 @@ impl MemorySet {
     }
 
     /// unmap area
-    pub fn unmap(&mut self, start_va: VirtAddr, end_va: VirtAddr) {
+    pub fn _unmap(&mut self, start_va: VirtAddr, end_va: VirtAddr) {
         let start_vpn = start_va.floor();
         let end_vpn = end_va.ceil();
 
@@ -296,6 +346,35 @@ impl MemorySet {
                 self.areas.remove(i);
             }
         }
+    }
+
+
+    #[inline(always)]
+    fn invalid_aligned(&self, start_va: VirtAddr) -> bool {
+        !start_va.aligned()
+    }
+
+    #[inline(always)]
+    fn invalid_port(&self, port: usize) -> bool {
+        (port & !0x7 != 0) || (port & 0x7 == 0)
+    }
+
+    #[inline(always)]
+    fn invalid_page_mapped(&self, start_va: VirtAddr, end_va: VirtAddr) -> bool {
+        let start_vpn = start_va.floor();
+        let end_vpn = end_va.ceil();
+        self.areas.iter().any(|area| {
+            start_vpn <= area.vpn_range.get_start() && end_vpn > area.vpn_range.get_start()
+        })
+    }
+
+    #[inline(always)]
+    fn invalid_page_mapped_count(&self, start_va: VirtAddr, end_va: VirtAddr) -> bool {
+        let start_vpn = start_va.floor();
+        let end_vpn = end_va.ceil();
+        self.areas.iter().filter(|area| {
+            start_vpn <= area.vpn_range.get_start() && end_vpn > area.vpn_range.get_start()
+        }).count() < (end_vpn.0 - start_vpn.0)
     }
 }
 /// map area structure, controls a contiguous piece of virtual memory
