@@ -14,6 +14,9 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
+use crate::config::MAX_SYSCALL_NUM;
+use crate::mm::{VirtAddr, MapPermission, MemorySet};
+
 use crate::loader::{get_app_data, get_num_app};
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
@@ -23,6 +26,10 @@ use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
+
+use crate::timer::get_time_ms;
+use crate::syscall::TaskInfo;
+
 
 /// The task manager, where all the tasks are managed.
 ///
@@ -153,6 +160,34 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    /// Get current task information
+    fn get_current_task_info(&self) -> TaskInfo {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let current_task = &inner.tasks[current];
+        TaskInfo {
+            status: current_task.task_status,
+            syscall_times: current_task.syscall_times,
+            time: get_time_ms() - current_task.start_time_ms
+        }
+    }
+
+    /// Increase syscall times of current task
+    fn increase_current_task_syscall_times(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].syscall_times[syscall_id] += 1;
+    }
+
+    /// Get current task
+    fn get_current_task(&self) -> &'static mut TaskControlBlock {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        unsafe {
+            &mut *(&mut inner.tasks[current] as *mut TaskControlBlock)
+        }
+    }
 }
 
 /// Run the first task in task list.
@@ -201,4 +236,96 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// Get current task information
+pub fn current_task_info() -> TaskInfo {
+    TASK_MANAGER.get_current_task_info()
+}
+
+/// Get current task
+pub fn current_task() -> &'static mut TaskControlBlock {
+    TASK_MANAGER.get_current_task()
+}
+
+/// Increase syscall times of current task
+pub fn increase_current_task_syscall_times(syscall_id: usize) {
+    if syscall_id >= MAX_SYSCALL_NUM {
+        panic!("Invalid syscall by syscall_id: {}", syscall_id);
+    }
+    TASK_MANAGER.increase_current_task_syscall_times(syscall_id);
+}
+
+/// new memory
+pub fn new_memory(start: usize, len: usize, port: usize) -> isize {
+    if len == 0 {
+        return 0;
+    }
+
+    if invalid_port(port) {
+        return -1;
+    }
+    
+    let start_va = start.into();
+    if invalid_aligned(start_va) {
+        return -1;
+    }
+
+    let current_task = current_task();
+    let mut end_va = (start + len).into();
+    if invalid_page_mapped(&current_task.memory_set, start_va, end_va) {
+        return -1;
+    }
+
+    let mut permission = MapPermission::from_bits((port as u8) << 1).unwrap();
+    permission.set(MapPermission::U, true);
+
+    if end_va.aligned() {
+        end_va = (end_va.0 + 1).into();
+    }
+    current_task.memory_set.insert_framed_area(start_va, end_va, permission);
+
+    0
+}
+
+#[inline(always)]
+fn invalid_aligned(start_va: VirtAddr) -> bool {
+    !start_va.aligned()
+}
+
+#[inline(always)]
+fn invalid_port(port: usize) -> bool {
+    (port & !0x7 != 0) || (port & 0x7 == 0)
+}
+
+#[inline(always)]
+fn invalid_page_mapped(memory_set: &MemorySet, start_va: VirtAddr, end_va: VirtAddr) -> bool {
+    let start_vpn = start_va.floor();
+    let end_vpn = end_va.ceil();
+    memory_set.areas.iter().any(|area| {
+        start_vpn <= area.vpn_range.get_start() && end_vpn > area.vpn_range.get_start()
+    })
+}
+
+/// delete memory
+pub fn delete_memory(start: usize, len: usize) -> isize {
+    if len == 0 {
+        return 0;
+    }
+
+    let start_va = start.into();
+    if invalid_aligned(start_va) {
+        return -1;
+    }
+
+    let current_task = current_task();
+    let memory_set = &mut current_task.memory_set;
+
+    let mut end_va: VirtAddr = (start + len).into();
+    if end_va.aligned() {
+        end_va = (end_va.0 + 1).into();
+    }
+    memory_set.unmap(start_va, end_va);
+    
+    0
 }

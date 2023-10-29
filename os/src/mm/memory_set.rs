@@ -35,8 +35,10 @@ lazy_static! {
 }
 /// address space
 pub struct MemorySet {
-    page_table: PageTable,
-    areas: Vec<MapArea>,
+    /// PageTable
+    pub page_table: PageTable,
+    /// MapArea
+    pub areas: Vec<MapArea>,
 }
 
 impl MemorySet {
@@ -262,10 +264,29 @@ impl MemorySet {
             false
         }
     }
+
+    /// unmap area
+    pub fn unmap(&mut self, start_va: VirtAddr, end_va: VirtAddr) {
+        let start_vpn = start_va.floor();
+        let end_vpn = end_va.ceil();
+
+        let need_clear_area_len: usize = self.areas.len();
+        for i in 0..need_clear_area_len {
+            if self.areas.get(i).is_none() {
+                continue;
+            }
+
+            if start_vpn <= self.areas[i].vpn_range.get_start() && end_vpn > self.areas[i].vpn_range.get_start() {
+                self.areas[i].unmap(&mut self.page_table);
+                self.areas.remove(i);
+            }
+        }
+    }
 }
 /// map area structure, controls a contiguous piece of virtual memory
 pub struct MapArea {
-    vpn_range: VPNRange,
+    /// VPNRange
+    pub vpn_range: VPNRange,
     data_frames: BTreeMap<VirtPageNum, FrameTracker>,
     map_type: MapType,
     map_perm: MapPermission,
