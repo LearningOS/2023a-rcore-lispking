@@ -306,7 +306,7 @@ impl MemorySet {
 
         let end_va = (start + len).into();
 
-        if self.invalid_page_mapped_count(start_va, end_va) {
+        if self.invalid_page_mapped(start_va, end_va) {
             return -1;
         }
 
@@ -366,15 +366,6 @@ impl MemorySet {
         self.areas.iter().any(|area| {
             start_vpn <= area.vpn_range.get_start() && end_vpn > area.vpn_range.get_start()
         })
-    }
-
-    #[inline(always)]
-    fn invalid_page_mapped_count(&self, start_va: VirtAddr, end_va: VirtAddr) -> bool {
-        let start_vpn = start_va.floor();
-        let end_vpn = end_va.ceil();
-        self.areas.iter().filter(|area| {
-            start_vpn <= area.vpn_range.get_start() && end_vpn > area.vpn_range.get_start()
-        }).count() < (end_vpn.0 - start_vpn.0)
     }
 }
 /// map area structure, controls a contiguous piece of virtual memory
