@@ -288,7 +288,7 @@ impl MemorySet {
         let mut permission = MapPermission::from_bits((port as u8) << 1).unwrap();
         permission.set(MapPermission::U, true);
 
-        self._mmap(start_va, end_va, permission);
+        self.insert_framed_area(start_va, end_va, permission);
 
         0
     }
@@ -313,22 +313,6 @@ impl MemorySet {
         self._unmap(start_va, end_va);
         
         0
-    }
-
-    /// mmap area, support more page size handle
-    #[inline(always)]
-    pub fn _mmap(&mut self, start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) {
-        let mut start = start_va.0;
-        let end = end_va.0;
-        while start < end {
-            let mut max_va = start + PAGE_SIZE;
-            if max_va > end {
-                max_va = end;
-            }
-    
-            self.insert_framed_area(start.into(), max_va.into(), permission);
-            start = max_va;
-        }
     }
 
     /// unmap area
