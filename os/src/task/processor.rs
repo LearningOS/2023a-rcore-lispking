@@ -61,6 +61,7 @@ pub fn run_tasks() {
             let mut task_inner = task.inner_exclusive_access();
             let next_task_cx_ptr = &task_inner.task_cx as *const TaskContext;
             task_inner.task_status = TaskStatus::Running;
+            task_inner.update_stride();
             // release coming task_inner manually
             drop(task_inner);
             // release coming task TCB manually
@@ -98,6 +99,30 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
         .unwrap()
         .inner_exclusive_access()
         .get_trap_cx()
+}
+
+/// memory map
+pub fn mmap(start: usize, len: usize, port: usize) -> isize {
+    current_task()
+        .unwrap()
+        .inner_exclusive_access()
+        .mmap(start, len, port)
+}
+
+/// delete memory
+pub fn munmap(start: usize, len: usize) -> isize {
+    current_task()
+        .unwrap()
+        .inner_exclusive_access()
+        .munmap(start, len)
+}
+
+/// set task priority
+pub fn set_priority(priority: u8) {
+    current_task()
+        .unwrap()
+        .inner_exclusive_access()
+        .set_priority(priority);
 }
 
 ///Return to idle control flow for new scheduling

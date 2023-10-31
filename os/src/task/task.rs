@@ -1,7 +1,7 @@
 //! Types related to task management & Functions for completely changing TCB
 use super::TaskContext;
-use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
-use crate::config::TRAP_CONTEXT_BASE;
+use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle, add_task};
+use crate::config::{TRAP_CONTEXT_BASE, MAX_SYSCALL_NUM, PROCESS_DEFAULT_PRIORITY, BIG_STRIDE};
 use crate::fs::{File, Stdin, Stdout};
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::sync::UPSafeCell;
@@ -10,6 +10,7 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefMut;
+use core::cmp::Ordering;
 
 /// Task control block structure
 ///
@@ -71,6 +72,18 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+
+    /// System call times
+    pub syscall_times: [u32; MAX_SYSCALL_NUM],
+
+    /// Task start time
+    pub start_time_ms: usize,
+
+    /// priority, must >= 2
+    pub priority: u8,
+
+    /// stride
+    pub stride: u8,
 }
 
 impl TaskControlBlockInner {
@@ -86,6 +99,7 @@ impl TaskControlBlockInner {
     pub fn is_zombie(&self) -> bool {
         self.get_status() == TaskStatus::Zombie
     }
+
     pub fn alloc_fd(&mut self) -> usize {
         if let Some(fd) = (0..self.fd_table.len()).find(|fd| self.fd_table[*fd].is_none()) {
             fd
@@ -93,6 +107,39 @@ impl TaskControlBlockInner {
             self.fd_table.push(None);
             self.fd_table.len() - 1
         }
+    }
+
+    /// memory map
+    pub fn mmap(&mut self, start: usize, len: usize, port: usize) -> isize {
+        self.memory_set.mmap(start, len, port)
+    }
+
+    /// delete memory
+    pub fn munmap(&mut self, start: usize, len: usize) -> isize {
+        self.memory_set.munmap(start, len)
+    }
+
+    /// Get start time of task
+    pub fn get_start_time_ms(&self) -> usize {
+        self.start_time_ms
+    }
+
+    /// increase syscall times
+    pub fn increase_syscall_times(&mut self, syscall_id: usize) {
+        if syscall_id >= MAX_SYSCALL_NUM {
+            panic!("Invalid syscall by syscall_id: {}", syscall_id);
+        }
+        self.syscall_times[syscall_id] += 1;
+    }
+
+    /// set priority
+    pub fn set_priority(&mut self, priority: u8) {
+        self.priority = priority;
+    }
+
+    /// update stride
+    pub fn update_stride(&mut self) {
+        self.stride += BIG_STRIDE / self.priority;
     }
 }
 
@@ -135,6 +182,10 @@ impl TaskControlBlock {
                     ],
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    syscall_times: [0; MAX_SYSCALL_NUM],
+                    start_time_ms: 0,
+                    priority: PROCESS_DEFAULT_PRIORITY,
+                    stride: 0,
                 })
             },
         };
@@ -216,6 +267,10 @@ impl TaskControlBlock {
                     fd_table: new_fd_table,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    syscall_times: [0; MAX_SYSCALL_NUM],
+                    start_time_ms: 0,
+                    priority: parent_inner.priority,
+                    stride: 0,
                 })
             },
         });
@@ -261,6 +316,26 @@ impl TaskControlBlock {
             None
         }
     }
+
+    /// spawn new task from elf data
+    pub fn spawn(self: &Arc<Self>, elf_data: &[u8]) -> isize {
+        let new_task = Arc::new(TaskControlBlock::new(elf_data));
+        let new_pid = new_task.getpid();
+
+        // add new task to parent task
+        self.inner_exclusive_access()
+            .children
+            .push(new_task.clone());
+
+        // link parent task to the new task
+        new_task.inner_exclusive_access().parent = Some(Arc::downgrade(self));
+
+        // add new task to task manager
+        add_task(new_task);
+
+        // return pid of new task
+        new_pid as isize
+    }
 }
 
 #[derive(Copy, Clone, PartialEq)]
@@ -275,3 +350,27 @@ pub enum TaskStatus {
     /// exited
     Zombie,
 }
+
+
+impl Ord for TaskControlBlock {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let inner = self.inner_exclusive_access();
+        let other_inner = other.inner_exclusive_access();
+        
+        inner.stride.cmp(&other_inner.stride)
+    }
+}
+
+impl PartialOrd for TaskControlBlock {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for TaskControlBlock {
+    fn eq(&self, other: &Self) -> bool {
+        self.pid == other.pid
+    }
+}
+
+impl Eq for TaskControlBlock {}
